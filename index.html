@@ -36,15 +36,18 @@ body {
 }
 header { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
 header h1 { white-space: nowrap; font-family: var(--display); font-weight: 700; font-size: 19px; letter-spacing: .04em; margin: 0; text-transform: uppercase; }
-header span { font-family: var(--mono); font-size: 11px; color: var(--muted); }
-#screen { position: relative; width: 100%; aspect-ratio: 1 / 1; max-width: 100%; max-height: 52vh; margin: 0 auto; border-radius: 6px; overflow: hidden; background: #000; }
+header span { font-family: var(--mono); font-size: 11px; color: var(--muted); flex: 1; text-align: right; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#menuBtn { min-height: 30px; font-size: 13px; padding: 2px 10px; }
+.fine { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; }
+.fine button { font-family: var(--mono); font-size: 14px; padding: 2px; }
+#screen { position: relative; width: min(100%, calc(100vh - 340px)); width: min(100%, calc(100dvh - 340px)); min-width: 200px; aspect-ratio: 1 / 1; max-width: 100%; margin: 0 auto; border-radius: 6px; overflow: hidden; background: #000; }
 #fluoro { width: 100%; height: 100%; display: block; }
 #ecg { width: 100%; height: 46px; display: block; background: #050807; border-radius: 4px; }
 .readouts { display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px; font-family: var(--mono); font-variant-numeric: tabular-nums; }
 .readouts div { background: var(--panel); border-radius: 4px; padding: 3px 6px; }
 .readouts small { display: block; font-size: 9px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
 .readouts b { font-size: 14px; font-weight: 600; }
-#msg { background: var(--panel); border-left: 3px solid var(--ecg); border-radius: 4px; padding: 6px 8px; font-size: 13px; line-height: 1.35; min-height: 36px; }
+#msg { flex-shrink: 0; background: var(--panel); border-left: 3px solid var(--ecg); border-radius: 4px; padding: 6px 8px; font-size: 13px; line-height: 1.35; min-height: 36px; }
 #msg.warn { border-left-color: var(--amber); }
 #msg.bad { border-left-color: var(--red); }
 #msg b { font-family: var(--display); letter-spacing: .05em; text-transform: uppercase; font-size: 14px; }
@@ -52,7 +55,7 @@ header span { font-family: var(--mono); font-size: 11px; color: var(--muted); }
 #gauge .bar { flex: 1; height: 14px; border-radius: 3px; position: relative; overflow: hidden;
   background: linear-gradient(90deg, #22302a 0 40%, #2d4a33 40% 53%, #3d6b3f 53% 70%, #5c5222 70% 80%, #5c2622 80% 100%); }
 #gauge .fill { position: absolute; inset: 0 auto 0 0; background: rgba(240,240,230,.55); width: 0; }
-#controls { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; margin-top: auto; }
+#controls { flex-shrink: 0; display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; margin-top: auto; }
 button {
   font-family: var(--display); font-weight: 700; font-size: 17px; letter-spacing: .04em; text-transform: uppercase;
   color: var(--fg); background: var(--btn); border: 1px solid var(--line); border-radius: 8px;
@@ -92,7 +95,7 @@ button:focus-visible { outline: 2px solid var(--amber); outline-offset: 1px; }
 </style>
 
 <div id="app">
-  <header><h1>Sala Emodinamica</h1><span id="caseLabel">Dr. Giuseppe · Papardo</span></header>
+  <header><h1>Sala Emodinamica</h1><span id="caseLabel">Dr. Giuseppe · Papardo</span><button id="menuBtn">Menu</button></header>
   <div id="screen"><canvas id="fluoro"></canvas></div>
   <canvas id="ecg"></canvas>
   <div class="readouts">
@@ -307,7 +310,7 @@ function wireOk() {
 }
 
 // ---------- diametri / contrasto ----------
-function bell(s) { const L = S.lesion; if (s <= L.a || s >= L.b) return 0; return 0.5 * (1 + Math.cos(TAU * (s - L.c) / L.L)); }
+function bell(s) { const L = S.lesion; if (s <= L.a || s >= L.b) return 0; return Math.sqrt(0.5 * (1 + Math.cos(TAU * (s - L.c) / L.L))); }
 function lumen(v, s) {
   let d = v.d0 + (v.d1 - v.d0) * Math.min(1, s / v.len);
   if (v.id === C.target) {
@@ -490,9 +493,9 @@ function drawFluoro() {
   ctx.fillText(C.proj, 8 * DPR, 8 * DPR);
   ctx.fillText(S.inj && S.t - S.inj.t0 < 3.2 ? 'CINE 15 f/s' : 'SCOPIA 7.5 p/s', 8 * DPR, 22 * DPR);
   ctx.textAlign = 'right';
-  ctx.fillText(C.cat, W - 8 * DPR, 8 * DPR);
-  if (!S.fluoroOn) { ctx.fillStyle = 'rgba(242,179,61,0.9)'; ctx.fillText('LIH', W - 8 * DPR, 22 * DPR); }
-  else { ctx.fillStyle = 'rgba(255,214,90,0.95)'; ctx.beginPath(); ctx.arc(W - 14 * DPR, 28 * DPR, 5 * DPR, 0, TAU); ctx.fill(); }
+  ctx.textBaseline = 'bottom'; ctx.fillText(C.cat, W - 8 * DPR, H - 8 * DPR); ctx.textBaseline = 'top';
+  if (!S.fluoroOn) { ctx.fillStyle = 'rgba(242,179,61,0.9)'; ctx.fillText('LIH', W - 8 * DPR, 8 * DPR); }
+  else { ctx.fillStyle = 'rgba(255,214,90,0.95)'; ctx.beginPath(); ctx.arc(W - 14 * DPR, 14 * DPR, 5 * DPR, 0, TAU); ctx.fill(); }
   ctx.textAlign = 'left';
 }
 
@@ -541,6 +544,11 @@ function btn(label, sub, opts = {}) {
   return b;
 }
 function setControls(list) { const c = $('controls'); c.innerHTML = ''; for (const b of list) c.appendChild(b); for (const k in held) held[k] = false; }
+function fineBox() {
+  const d = document.createElement('div'); d.className = 'fine';
+  d.append(btn('−1', 'mm', { id: 'bFineBack', onClick: () => nudgeStent(-MM) }), btn('+1', 'mm', { id: 'bFineFwd', onClick: () => nudgeStent(MM) }));
+  return d;
+}
 const contrastBtn = () => btn('Contrasto', '8 ml · cine', { onClick: inject });
 
 function setPhase(p) {
@@ -554,33 +562,29 @@ function setPhase(p) {
       contrastBtn(),
       btn('Porta lo stent', 'guida in posizione', { id: 'bNext', cls: 'primary wide2', onClick: () => openStentChoice() }),
     ]);
-    say('<b>Fase 1 · Guida</b> Inietta contrasto per vedere l\'albero coronarico, poi porta la guida oltre la stenosi. Ruota la punta curva verso il ramo giusto prima di ogni biforcazione.');
+    say('<b>Fase 1 · Guida</b> Inietta contrasto, poi porta la guida oltre la stenosi. Prima di ogni biforcazione ruota la punta verso il ramo giusto.');
   } else if (p === 'stent') {
     setControls([
       btn('◀ Ritira', 'tieni premuto', { hold: 'back' }),
-      btn('± 1 mm', 'tocca: ‹ metà · › metà', { id: 'bFine' }),
+      fineBox(),
       btn('Avanza ▶', 'tieni premuto', { hold: 'fwd' }),
       contrastBtn(),
       btn('Gonfia qui', 'stent in sede', { id: 'bNext', cls: 'primary wide2', onClick: () => setPhase('gonfia') }),
     ]);
-    $('bFine').addEventListener('click', e => {
-      const r = e.currentTarget.getBoundingClientRect();
-      nudgeStent(e.clientX < r.left + r.width / 2 ? -MM : MM);
-    });
-    say('<b>Fase 2 · Posizionamento</b> Porta lo stent sulla lesione. I due marker devono stare 2–3 mm oltre i bordi della placca. Il cuore si muove: controlla col contrasto.');
+    say('<b>Fase 2 · Posizionamento</b> Allinea i due marker 2–3 mm oltre i bordi della placca. Controlla col contrasto.');
   } else if (p === 'gonfia') {
     setControls([
       btn('◀ Riposiziona', '', { onClick: () => { if (!S.inflating) setPhase('stent'); } }),
       btn('Gonfia', 'tieni premuto · rilascia per sgonfiare', { hold: 'infl', cls: 'danger wide2', onRelease: deflate }),
     ]);
-    say('<b>Fase 3 · Rilascio</b> Tieni premuto per gonfiare il pallone. Pressione nominale 12 atm, pressione di rottura (RBP) 18 atm. Rilascia per sgonfiare.');
+    say('<b>Fase 3 · Rilascio</b> Tieni premuto per gonfiare. Nominale 12 atm, RBP 18 atm. Rilascia per sgonfiare.');
   } else if (p === 'finale') {
     setControls([
       contrastBtn(),
       btn('Postdilata', 'NC 16 atm', { id: 'bPost', onClick: postDil }),
       btn('Termina', 'referto', { id: 'bEnd', cls: 'primary', onClick: () => report() }),
     ]);
-    say('<b>Controllo finale</b> Inietta contrasto e valuta il risultato. Se lo stent è sottoespanso puoi postdilatare. Poi chiudi la procedura.');
+    say('<b>Controllo finale</b> Inietta contrasto e valuta il risultato. Se serve postdilata, poi termina.');
   }
 }
 let msgLock = 0;
@@ -803,6 +807,7 @@ function step(dt) {
   $('rBp').textContent = S.extravasation ? '78/50' : (132 - Math.round(S.st * 20)) + '/' + (78 - Math.round(S.st * 8));
 }
 
+$('menuBtn').addEventListener('click', () => { if (S && S.inflating) return; intro(); });
 window.addEventListener('resize', () => { if (S) resize(); });
 document.addEventListener('gesturestart', e => e.preventDefault());
 // partita dimostrativa dietro al menu iniziale
