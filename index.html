@@ -105,7 +105,7 @@ button:focus-visible { outline: 2px solid var(--amber); outline-offset: 1px; }
     <div><small>PA</small><b id="rBp">132/78</b></div>
   </div>
   <div id="msg"></div>
-  <div id="gauge" hidden><span>Insufflatore</span><div class="bar"><div class="fill" id="gaugeFill"></div></div><b id="gaugeVal">0 atm</b></div>
+  <div id="gauge" hidden><span>Insufflatore</span><div class="bar" id="gaugeBar"><div class="fill" id="gaugeFill"></div></div><b id="gaugeVal">0 atm</b></div>
   <div id="controls"></div>
 </div>
 <div id="overlay"></div>
@@ -225,8 +225,8 @@ function newGame(ci) {
     phase: 'guida', t: 0, route: [{ v: G.cat, off: 0 }], T: G.cat.len - 30, tipSign: -1,
     push: 0, contrastMl: 0, fluoroS: 0, inj: null, injCount: 0, finalInj: false,
     heart: 0, noiseI: 0, fluoroOn: false,
-    lesion: { c, a: c - L/2, b: c + L/2, L, sev: C.lesion.sev },
-    stent: null, pressure: 0, maxP: 0, inflating: false, inflT: 0, deployed: null,
+    lesion: { c, a: c - L/2, b: c + L/2, L, sev: C.lesion.sev, sev0: C.lesion.sev },
+    stent: null, predil: null, dissection: false, blockedMsg: false, pressure: 0, maxP: 0, inflating: false, inflT: 0, deployed: null,
     complication: null, st: 0, hr: 68, wireDone: false, rotations: 0, msgT: 0, extravasation: 0,
   };
   $('caseLabel').textContent = C.title;
@@ -425,6 +425,16 @@ function drawContrast(ctx) {
       g.beginPath(); g.moveTo(a[0], a[1]); g.lineTo(b[0], b[1]); g.stroke();
     }
   }
+  // flap di dissezione non coperto
+  if (S.dissection && !dissectionCovered()) {
+    const tgt = G.map[C.target];
+    g.lineWidth = 0.6 * MM;
+    for (let s = S.lesion.c; s < S.lesion.b + 6 * MM; s += 4) {
+      if (gDist(tgt, s + 4) > D) break;
+      const p = disp(tgt, rawAt(tgt, s)), q = disp(tgt, rawAt(tgt, s + 4)), t = tanAt(tgt, s), o = (lumen(tgt, s) / 2 + 0.9) * MM;
+      g.beginPath(); g.moveTo(p[0] - t[1] * o, p[1] + t[0] * o); g.lineTo(q[0] - t[1] * o, q[1] + t[0] * o); g.stroke();
+    }
+  }
   // stravaso da perforazione
   if (S.extravasation > 0) {
     const p = routeP(S.T);
@@ -467,11 +477,11 @@ function drawFluoro() {
     const a = st.P - st.L/2, b = st.P + st.L/2;
     if (S.inflating || S.pressure > 0) {
       const dd = balloonDiam(S.pressure) * MM;
-      ctx.strokeStyle = 'rgba(38,39,35,0.62)'; ctx.lineWidth = Math.max(1.2 * MM, dd); ctx.lineCap = 'butt';
+      ctx.strokeStyle = 'rgba(30,31,28,0.78)'; ctx.lineWidth = Math.max(1.2 * MM, dd); ctx.lineCap = 'butt';
       strokePath(ctx, sampleRoute(a - 1.5*MM, b + 1.5*MM, 3)); ctx.lineCap = 'round';
     }
-    ctx.strokeStyle = 'rgba(28,29,26,0.78)'; ctx.lineWidth = 1.1 * MM;
-    strokePath(ctx, sampleRoute(a, b, 3));
+    if (st.kind === 'stent') { ctx.strokeStyle = 'rgba(28,29,26,0.78)'; ctx.lineWidth = 1.1 * MM; strokePath(ctx, sampleRoute(a, b, 3)); }
+    else { ctx.strokeStyle = 'rgba(28,29,26,0.55)'; ctx.lineWidth = 0.8 * MM; strokePath(ctx, sampleRoute(a - 2 * MM, b + 2 * MM, 3)); }
     ctx.fillStyle = 'rgba(10,10,9,0.95)';
     for (const m of [a, b]) { const p = routeP(m); ctx.beginPath(); ctx.arc(p[0], p[1], 0.85 * MM, 0, TAU); ctx.fill(); }
   }
@@ -560,24 +570,30 @@ function setPhase(p) {
       btn('⟳ Ruota', 'torquer', { onClick: () => { S.tipSign *= -1; S.rotations++; S.fluoroS += 0.4; } }),
       btn('Avanza ▶', 'tieni premuto', { hold: 'fwd' }),
       contrastBtn(),
-      btn('Porta lo stent', 'guida in posizione', { id: 'bNext', cls: 'primary wide2', onClick: () => openStentChoice() }),
+      btn('Pallone', S.predil ? 'già predilatato' : 'predilatazione', { id: 'bBal', cls: S.predil ? '' : 'primary', onClick: () => openDeviceChoice('balloon') }),
+      btn('Stent', 'DES', { id: 'bNext', cls: S.predil ? 'primary' : '', onClick: () => openDeviceChoice('stent') }),
     ]);
-    say('<b>Fase 1 · Guida</b> Inietta contrasto, poi porta la guida oltre la stenosi. Prima di ogni biforcazione ruota la punta verso il ramo giusto.');
+    if (S.predil) say('<b>Predilatazione fatta</b> Ora porta lo stent. Inietta contrasto per vedere il risultato del pallone.');
+    else say('<b>Fase 1 · Guida</b> Inietta contrasto, poi porta la guida oltre la stenosi. Prima di ogni biforcazione ruota la punta verso il ramo giusto.');
   } else if (p === 'stent') {
     setControls([
       btn('◀ Ritira', 'tieni premuto', { hold: 'back' }),
       fineBox(),
       btn('Avanza ▶', 'tieni premuto', { hold: 'fwd' }),
       contrastBtn(),
-      btn('Gonfia qui', 'stent in sede', { id: 'bNext', cls: 'primary wide2', onClick: () => setPhase('gonfia') }),
+      btn('Cambia', 'ritira il ' + spec().name, { onClick: () => { S.stent = null; setPhase('guida'); } }),
+      btn('Gonfia qui', spec().name + ' in sede', { id: 'bNext', cls: 'primary', onClick: () => setPhase('gonfia') }),
     ]);
-    say('<b>Fase 2 · Posizionamento</b> Allinea i due marker 2–3 mm oltre i bordi della placca. Controlla col contrasto.');
+    if (S.stent.kind === 'balloon') say('<b>Predilatazione</b> Porta il pallone dentro la stenosi, con i marker a cavallo della placca. Controlla col contrasto.');
+    else say('<b>Fase 2 · Stent</b> Allinea i due marker 2–3 mm oltre i bordi della placca. Controlla col contrasto.');
   } else if (p === 'gonfia') {
     setControls([
       btn('◀ Riposiziona', '', { onClick: () => { if (!S.inflating) setPhase('stent'); } }),
       btn('Gonfia', 'tieni premuto · rilascia per sgonfiare', { hold: 'infl', cls: 'danger wide2', onRelease: deflate }),
     ]);
-    say('<b>Fase 3 · Rilascio</b> Tieni premuto per gonfiare. Nominale 12 atm, RBP 18 atm. Rilascia per sgonfiare.');
+    setGaugeZones();
+    const k = spec();
+    say(`<b>${S.stent.kind === 'balloon' ? 'Predilatazione' : 'Fase 3 · Rilascio'}</b> Tieni premuto per gonfiare. Nominale ${k.nom} atm, RBP ${k.rbp} atm. Rilascia per sgonfiare.`);
   } else if (p === 'finale') {
     setControls([
       contrastBtn(),
@@ -597,27 +613,41 @@ function inject() {
   if (S.phase === 'finale') S.finalInj = true;
 }
 
-// ---------- stent ----------
+// ---------- dispositivi (pallone e stent) ----------
+const SPEC = {
+  balloon: { nom: 8, rbp: 14, burst: 16, comp: 0.025, name: 'pallone' },
+  stent:   { nom: 12, rbp: 18, burst: 20, comp: 0.012, name: 'stent' },
+};
+function spec() { return SPEC[S.stent ? S.stent.kind : 'stent']; }
+function setGaugeZones() {
+  const k = spec(), pc = x => (x / 24 * 100).toFixed(1) + '%';
+  $('gaugeBar').style.background = `linear-gradient(90deg, #22302a 0 ${pc(k.nom - 3)}, #2d4a33 ${pc(k.nom - 3)} ${pc(k.nom)}, #3d6b3f ${pc(k.nom)} ${pc(k.rbp)}, #5c5222 ${pc(k.rbp)} ${pc(k.burst)}, #5c2622 ${pc(k.burst)} 100%)`;
+}
 function qca() {
   const tgt = G.map[C.target];
   const ref = tgt.d0 + (tgt.d1 - tgt.d0) * (S.lesion.c / tgt.len);
   return { ref: Math.round(ref * 20) / 20, len: C.lesion.lenMm, sev: Math.round(S.lesion.sev * 100) };
 }
-function openStentChoice() {
+function openDeviceChoice(kind) {
   if (!wireOk()) return;
-  const q = qca();
+  const q = qca(), bal = kind === 'balloon';
   let d = null, L = null;
-  const diams = [2.25, 2.5, 2.75, 3.0, 3.5, 4.0], lens = [8, 12, 15, 18, 23, 28, 33];
+  const diams = bal ? [1.5, 2.0, 2.5, 3.0, 3.5] : [2.25, 2.5, 2.75, 3.0, 3.5, 4.0];
+  const lens = bal ? [10, 12, 15, 20] : [8, 12, 15, 18, 23, 28, 33];
+  const hint = bal
+    ? 'Pallone semicompliante. Di solito si sceglie un diametro un po\' sotto il riferimento (rapporto 0,8–1) e una lunghezza simile alla lesione.'
+    : 'Stent medicato (DES) su pallone. Scegli il diametro più vicino al riferimento e una lunghezza che copra la placca con qualche millimetro di margine.';
   showOverlay(`
     <div class="card">
-      <div class="eyebrow">Fase 2 · scelta del dispositivo</div>
-      <h2>Quale stent apri?</h2>
+      <div class="eyebrow">${bal ? 'Predilatazione' : 'Stent'} · scelta del dispositivo</div>
+      <h2>${bal ? 'Quale pallone usi?' : 'Quale stent apri?'}</h2>
       <div class="qca"><span>QCA · diametro di riferimento</span><span>${q.ref.toFixed(2)} mm</span>
       <span>Lunghezza lesione</span><span>${q.len} mm</span><span>Stenosi (diametro)</span><span>${q.sev}%</span></div>
-      <h3>Diametro (mm)</h3><div class="choices" id="cD">${diams.map(x => `<button data-v="${x}">${x.toFixed(2)}</button>`).join('')}</div>
+      <h3>Diametro (mm)</h3><div class="choices" id="cD">${diams.map(x => `<button data-v="${x}">${x.toFixed(bal ? 1 : 2)}</button>`).join('')}</div>
       <h3>Lunghezza (mm)</h3><div class="choices" id="cL">${lens.map(x => `<button data-v="${x}">${x}</button>`).join('')}</div>
-      <p class="how">Stent medicato (DES) su pallone. Scegli il diametro più vicino al riferimento e una lunghezza che copra la placca con qualche millimetro di margine.</p>
-      <button class="primary" id="cOk" disabled>Prepara lo stent</button>
+      <p class="how">${hint}</p>
+      <button class="primary" id="cOk" disabled>${bal ? 'Prepara il pallone' : 'Prepara lo stent'}</button>
+      <button id="cNo">Annulla</button>
     </div>`);
   const pick = (box, set) => box.addEventListener('click', e => {
     const b = e.target.closest('button'); if (!b) return;
@@ -626,17 +656,50 @@ function openStentChoice() {
   });
   pick($('cD'), v => d = v); pick($('cL'), v => L = v);
   $('cOk').addEventListener('click', () => {
-    S.stent = { d, Lmm: L, L: L * MM, P: G.cat.len * 0.6 };
+    S.stent = { kind, d, Lmm: L, L: L * MM, P: G.cat.len * 0.6 };
+    S.blockedMsg = false;
     hideOverlay(); setPhase('stent');
   });
+  $('cNo').addEventListener('click', hideOverlay);
 }
-function stentLimits() { return [G.cat.len * 0.6, S.T - 8 * MM - S.stent.L / 2]; }
+function crossBlocked() { return S.stent.kind === 'stent' && !S.predil && S.lesion.sev > 0.7; }
+function stentLimits() {
+  let hi = S.T - 8 * MM - S.stent.L / 2;
+  if (crossBlocked()) { const te = targetEntry(); hi = Math.min(hi, te.off + S.lesion.a + 1.5 * MM - S.stent.L / 2); }
+  return [G.cat.len * 0.6, hi];
+}
 function nudgeStent(dx) { const [lo, hi] = stentLimits(); S.stent.P = Math.max(lo, Math.min(hi, S.stent.P + dx)); S.fluoroS += 0.3; S.heartKick = 0.25; }
-function balloonDiam(p) { if (!S.stent) return 0; return p < 4 ? S.stent.d * 0.45 * (p / 4) + 1.1 * (1 - p / 4) * 0.4 : S.stent.d * (1 + 0.012 * (p - 12)); }
+function balloonDiam(p) {
+  if (!S.stent) return 0; const k = spec();
+  return p < 4 ? 0.45 + (S.stent.d * (1 + k.comp * (4 - k.nom)) - 0.45) * (p / 4) : S.stent.d * (1 + k.comp * (p - k.nom));
+}
+function dissectionCovered() { const D = S.deployed; return D && D.s0 <= S.lesion.a && D.s1 >= S.lesion.b + 3 * MM; }
+function predilate(p) {
+  const te = targetEntry(), st = S.stent, q = qca();
+  const s0 = st.P - st.L / 2 - te.off, s1 = st.P + st.L / 2 - te.off;
+  const cover = Math.max(0, Math.min(s1, S.lesion.b) - Math.max(s0, S.lesion.a)) / S.lesion.L;
+  const dEff = st.d * (1 + SPEC.balloon.comp * (Math.min(p, 16) - 8));
+  const ratio = dEff / q.ref;
+  const gain = Math.max(0, Math.min(1, (ratio - 0.55) / 0.4)) * cover;
+  S.lesion.sev = Math.max(0.3, S.lesion.sev0 * (1 - 0.6 * gain));
+  const diss = p > 16 || ratio > 1.15;
+  if (diss) S.dissection = true;
+  S.predil = { d: st.d, Lmm: st.Lmm, p, cover, ratio: st.d / q.ref, dissection: diss };
+  S.stent = null; S.pressure = 0; S.maxP = 0;
+  setPhase('guida');
+  if (p > 16) flash('<b>Rottura del pallone!</b> Dissezione della placca: dovrai coprirla bene con lo stent.', 'bad');
+  else if (diss) flash('<b>Dissezione</b> Pallone troppo grande per il vaso. Copri tutta la dissezione con lo stent.', 'bad');
+  else if (gain < 0.4) flash('Predilatazione poco efficace: la placca si è aperta poco. Puoi ripetere o portare lo stent.', 'warn');
+  else flash('Predilatazione a <b>' + p.toFixed(0) + ' atm</b>: placca aperta, stenosi ora circa ' + Math.round(S.lesion.sev * 100) + '%. Porta lo stent.');
+}
 function deflate() {
   if (S.phase !== 'gonfia' || !S.inflating) { S.inflating = false; return; }
   S.inflating = false;
   const p = S.maxP;
+  if (S.stent.kind === 'balloon') {
+    if (p < 3) { flash('Pressione troppo bassa, il pallone non si è aperto. Riprova.', 'warn'); S.pressure = 0; S.maxP = 0; S.inflT = 0; return; }
+    S.inflT = 0; setTimeout(() => predilate(p), 30); return;
+  }
   if (p < 6) { flash('Pressione troppo bassa, lo stent non si è aperto. Riprova.', 'warn'); S.pressure = 0; S.maxP = 0; S.inflT = 0; return; }
   const te = targetEntry(), st = S.stent;
   S.deployed = { s0: st.P - st.L/2 - te.off, s1: st.P + st.L/2 - te.off, diam: st.d * (1 + 0.012 * (Math.min(p, 20) - 12)), p, rupture: p > 20, post: false };
@@ -668,26 +731,36 @@ function evaluate() {
   const r = { parts: [], total: 0, notes: [] };
   const add = (name, pts, max, val) => { r.parts.push([name, val, pts, max]); r.total += pts; };
   if (!D) {
-    add('Stent', 0, 70, 'non impiantato');
+    add('Stent', 0, 60, 'non impiantato');
   } else {
     const mp = (S.lesion.a - D.s0) / MM, md = (D.s1 - S.lesion.b) / MM;
-    const side = m => m < 0 ? Math.max(0, 8 + m * 4) : m <= 5 ? 17.5 : Math.max(10, 17.5 - (m - 5) * 1.5);
-    add('Copertura prossimale', Math.round(side(mp)), 18, mp.toFixed(1) + ' mm');
-    add('Copertura distale', Math.round(side(md)), 17, md.toFixed(1) + ' mm');
+    const side = m => m < 0 ? Math.max(0, 7 + m * 4) : m <= 5 ? 15 : Math.max(9, 15 - (m - 5) * 1.5);
+    add('Copertura prossimale', Math.round(side(mp)), 15, mp.toFixed(1) + ' mm');
+    add('Copertura distale', Math.round(side(md)), 15, md.toFixed(1) + ' mm');
     if (mp < 0 || md < 0) r.notes.push('Geographic miss: parte della placca è rimasta fuori dallo stent.');
     const dd = Math.abs(st.d - q.ref);
-    add('Diametro stent', dd <= 0.25 ? 12 : dd <= 0.5 ? 7 : 2, 12, st.d.toFixed(2) + ' / rif ' + q.ref.toFixed(2));
+    add('Diametro stent', dd <= 0.25 ? 10 : dd <= 0.5 ? 6 : 2, 10, st.d.toFixed(2) + ' / rif ' + q.ref.toFixed(2));
     if (st.d - q.ref > 0.5) r.notes.push('Stent sovradimensionato: rischio di dissezione.');
     if (q.ref - st.d > 0.5) r.notes.push('Stent sottodimensionato: rischio di malapposizione.');
     const ok = st.Lmm >= q.len + 2 && st.Lmm <= q.len + 12;
-    add('Lunghezza stent', ok ? 8 : st.Lmm >= q.len ? 5 : 2, 8, st.Lmm + ' mm');
+    add('Lunghezza stent', ok ? 7 : st.Lmm >= q.len ? 4 : 2, 7, st.Lmm + ' mm');
     const p = D.p;
-    add('Pressione di rilascio', p > 20 ? 0 : p >= 12 && p <= 18 ? 15 : p >= 10 ? 10 : p >= 8 ? 5 : 0, 15, S.deployed.post ? 'post NC 16 atm' : p.toFixed(0) + ' atm');
+    add('Pressione di rilascio', p > 20 ? 0 : p >= 12 && p <= 18 ? 13 : p >= 10 ? 9 : p >= 8 ? 4 : 0, 13, S.deployed.post ? 'post NC 16 atm' : p.toFixed(0) + ' atm');
+  }
+  const P = S.predil;
+  if (!P) add('Predilatazione', 0, 10, 'non eseguita');
+  else {
+    const pts = (P.ratio >= 0.75 && P.ratio <= 1.05 ? 5 : 2) + (P.cover >= 0.9 ? 3 : 1) + (P.p >= 6 && P.p <= 14 ? 2 : 0);
+    add('Predilatazione', pts, 10, P.d.toFixed(1) + '×' + P.Lmm + ' · ' + P.p.toFixed(0) + ' atm');
+  }
+  if (S.dissection) {
+    if (dissectionCovered()) r.notes.push('Dissezione da pallone coperta dallo stent.');
+    else { r.total -= 10; r.notes.push('Dissezione da pallone non coperta dallo stent (−10).'); }
   }
   const cm = S.contrastMl;
-  add('Mezzo di contrasto', Math.round(cm <= 56 ? 15 : Math.max(0, 15 - (cm - 56) / 8)), 15, cm + ' ml');
+  add('Mezzo di contrasto', Math.round(cm <= 72 ? 15 : Math.max(0, 15 - (cm - 72) / 8)), 15, cm + ' ml');
   const fs = S.fluoroS;
-  add('Tempo di scopia', Math.round(fs <= 90 ? 15 : Math.max(0, 15 - (fs - 90) / 18)), 15, fmtTime(fs));
+  add('Tempo di scopia', Math.round(fs <= 120 ? 15 : Math.max(0, 15 - (fs - 120) / 18)), 15, fmtTime(fs));
   if (S.complication) { r.total = Math.max(0, r.total - (S.extravasation ? 60 : 25)); r.notes.unshift('Complicanza: ' + S.complication + '.'); }
   // stenosi residua
   const tgt = G.map[C.target];
@@ -744,6 +817,7 @@ function intro() {
         <span><b>Contrasto</b> mostra le coronarie per un paio di secondi. Ogni iniezione costa 8 ml.</span>
         <span><b>Ruota</b> gira la punta curva della guida: alle biforcazioni la guida entra nel ramo verso cui punta.</span>
         <span><b>Avanza / Ritira</b> si tengono premuti. Il tempo di scopia corre solo mentre lavori.</span>
+        <span><b>Pallone</b> predilata la placca: senza predilatazione lo stent non passa le stenosi più strette.</span>
         <span>Non spingere la guida contro il fondo di un vaso.</span>
       </div>
     </div>`);
@@ -769,7 +843,8 @@ function step(dt) {
     else S.push = 0;
     const ok = wireOk();
     const b = $('bNext'); if (b) b.disabled = !ok;
-    if (ok && !S.wireDone) { S.wireDone = true; flash('<b>Guida oltre la lesione</b> in sede distale. Ora puoi portare lo stent.'); }
+    const bb = $('bBal'); if (bb) bb.disabled = !ok;
+    if (ok && !S.wireDone) { S.wireDone = true; if (!S.predil) flash('<b>Guida oltre la lesione</b> in sede distale. Ora predilata col pallone.'); }
     if (!ok) S.wireDone = false;
   } else if (S.phase === 'stent') {
     const [lo, hi] = stentLimits();
@@ -777,18 +852,20 @@ function step(dt) {
     if (held.back) { S.stent.P = Math.max(lo, S.stent.P - 55 * dt); moving = true; }
     const te = targetEntry();
     const inCor = S.stent.P - S.stent.L / 2 > te.off - 40;
+    if (held.fwd && crossBlocked() && S.stent.P >= hi - 1 && !S.blockedMsg) { S.blockedMsg = true; flash('<b>Lo stent non passa</b> la placca è troppo stretta. Ritira lo stent con <b>Cambia</b> e predilata col pallone.', 'warn'); }
     const b = $('bNext'); if (b) b.disabled = !inCor;
   } else if (S.phase === 'gonfia') {
     if (held.infl) {
       S.inflating = true; moving = true;
       S.pressure = Math.min(24, S.pressure + 3.2 * dt); S.maxP = Math.max(S.maxP, S.pressure); S.inflT += dt;
-      if (S.pressure > 20.5) { held.infl = false; deflate(); }
+      if (S.pressure > spec().burst + 0.5) { held.infl = false; deflate(); }
     }
     $('gaugeFill').style.width = (S.pressure / 24 * 100) + '%';
     $('gaugeVal').textContent = S.pressure.toFixed(1) + ' atm';
     if (S.inflating && msgLock <= 0) {
-      if (S.pressure > 18) say('<b>Oltre la RBP</b> rischio di rottura del pallone!', 'bad');
-      else if (S.pressure >= 12) say('Pressione nominale raggiunta. Lo stent è espanso.');
+      const k = spec();
+      if (S.pressure > k.rbp) say('<b>Oltre la RBP</b> rischio di rottura del pallone!', 'bad');
+      else if (S.pressure >= k.nom) say(S.stent.kind === 'balloon' ? 'Pressione nominale: il pallone è aperto, la placca cede.' : 'Pressione nominale raggiunta. Lo stent è espanso.');
       else if (S.inflT > 2) say('Il paziente riferisce dolore toracico durante l\'insufflazione.', 'warn');
     }
   }
