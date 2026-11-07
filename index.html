@@ -320,7 +320,7 @@ function moveWire(dir, dt) {
     for (const ch of group) { const d = Math.abs(ch.angle - want); if (d < bestD) { bestD = d; best = ch; } }
     if (best !== 'main') {
       S.route.push({ v: best, off: top.off + at });
-      if (S.sb && best.id === S.sb.id && S.aw === 1 && S.deployed && !S.sbJailed && !S.sbRecrossed) {
+      if (S.sb && best.id === S.sb.id && S.aw === 1 && S.deployed && !S.sbJailed && !S.sbRecrossed && !S.kissDone) {
         S.sbRecrossed = true;
         flash('<b>Ramo laterale ricrossato</b> attraverso le maglie dello stent. Ora puoi fare il kissing balloon.');
         return;
@@ -505,7 +505,7 @@ function drawFluoro() {
   viewTf(ctx);
   // guide 0.014"
   for (let i = 0; i < S.wires.length; i++) { const w = getWire(i); if (w && w.route) drawWire(ctx, w.route, w.T, w.tipSign, i === S.aw ? 1 : 0.75); }
-  if (S.phase === 'kiss' && (S.inflating || S.pressure > 0)) drawKiss(ctx);
+  if (S.phase === 'kiss') drawKiss(ctx);
   // stent
   const st = S.stent;
   if (st && !S.deployed) {
@@ -667,11 +667,11 @@ function setPhase(p) {
     const k = spec();
     say(`<b>${S.stent.kind === 'balloon' ? 'Predilatazione' : 'Fase 3 · Rilascio'}</b> Tieni premuto per gonfiare. Nominale ${k.nom} atm, RBP ${k.rbp} atm. Rilascia per sgonfiare.`);
   } else if (p === 'finale' && C.bif) {
-    if (S.wires.length > 1) loadWire(1);
+    loadWire(1);
     setControls([
       ...wireRow(),
       contrastBtn(),
-      btn('Kissing', 'due palloni', { id: 'bKiss', cls: S.kissDone ? '' : 'primary', onClick: openKiss }),
+      btn('Kissing', 'serve la guida 2', { id: 'bKiss', onClick: openKiss }),
       btn('Termina', 'referto', { id: 'bEnd', onClick: () => report() }),
       wireBtn(''),
       btn('Postdilata', 'NC 16 atm', { id: 'bPost', cls: 'wide2', onClick: postDil }),
@@ -679,7 +679,8 @@ function setPhase(p) {
     if (S.deployed && S.deployed.post) $('bPost').disabled = true;
     if (S.kissDone) say('<b>Controllo finale</b> Inietta contrasto per vedere il risultato sui due rami, poi termina.');
     else if (S.sbJailed) say('<b>Ramo laterale chiuso dalle maglie</b> La guida 2 è intrappolata (jailed). Ritirala nell\'IVA e ripassala nella diagonale, poi fai il kissing.');
-    else say('<b>Biforcazione</b> Porta la guida 2 nella diagonale attraverso le maglie dello stent, poi fai il kissing.');
+    else if (S.sbRecrossed) say('<b>Biforcazione</b> Guida 2 già nella diagonale: fai il kissing balloon.');
+    else say('<b>Biforcazione</b> Stai muovendo la <b>guida 2</b>: portala nella diagonale attraverso le maglie dello stent, poi fai il kissing.');
   } else if (p === 'finale') {
     setControls([
       contrastBtn(),
@@ -803,9 +804,10 @@ function deflate() {
   let jail = false;
   if (S.sb) {
     const at = G.map[S.sb.id].at;
-    if (S.deployed.s0 < at && S.deployed.s1 > at) {
+    S.sbProtected = sbWireOk();
+    if (!(S.deployed.s0 < at && S.deployed.s1 > at)) S.sbRecrossed = true;   // ostio non coperto: nessuna maglia da attraversare
+    else {
       jail = true;
-      S.sbProtected = sbWireOk();
       S.sb.sev = Math.max(S.sb.sev, S.sbProtected ? 0.75 : 0.93);
       const w2 = S.wires[1];
       if (w2 && w2.route && w2.route.some(e => e.v.id === S.sb.id)) S.sbJailed = true;
@@ -1022,6 +1024,12 @@ function step(dt) {
     else if (held.back) { moveWire(-1, dt); moving = true; }
     else S.push = 0;
     const ok = wireOk();
+    const bk = $('bKiss');
+    if (bk) {
+      const why = kissOk(), lab = S.kissDone ? 'eseguito' : why ? 'serve la guida 2' : 'pronto';
+      bk.classList.toggle('primary', !why); bk.style.opacity = why ? '0.55' : '';
+      const sm = bk.querySelector('small'); if (sm && sm.textContent !== lab) sm.textContent = lab;
+    }
     if (S.sb && S.aw === 1 && !S.sbDone && sbWireOk()) { S.sbDone = true; if (!S.deployed) flash('<b>Guida 2 nella diagonale</b> ramo laterale protetto. Torna alla guida 1 o prosegui col pallone.'); }
     const b = $('bNext'); if (b) b.disabled = !ok;
     const bb = $('bBal'); if (bb) bb.disabled = !ok;
