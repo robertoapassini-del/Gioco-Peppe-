@@ -13,4 +13,12 @@ Apri `index.html` nel browser del telefono. Non serve installare niente.
 
 Il punteggio tiene conto di predilatazione, copertura della lesione, scelta dello stent, pressione, contrasto usato e tempo di scopia.
 
-Casi disponibili: IVA media, primo marginale, coronaria destra.
+Casi disponibili: IVA media, primo marginale, coronaria destra, biforcazione IVA–diagonale.
+
+## Biforcazione (caso 4)
+Tecnica dello stent provvisorio con kissing balloon:
+1. Guida 1 nell'IVA oltre la lesione, guida 2 nella prima diagonale per proteggerla (il tasto "Guida ⇄" cambia la guida che muovi).
+2. Predilatazione e stent sull'IVA, a cavallo dell'ostio della diagonale. La placca si sposta sull'ostio del ramo laterale e la guida 2 resta intrappolata dietro le maglie (jailed).
+3. Ritira la guida 2 nell'IVA e ripassala nella diagonale attraverso le maglie dello stent.
+4. Kissing balloon: scegli il pallone NC per il ramo principale e quello per la diagonale, poi gonfiali insieme (nominale 10 atm, RBP 16 atm).
+5. Controllo finale: il referto riporta anche la stenosi residua dell'ostio della diagonale.

@@ -42,6 +42,8 @@ header span { font-family: var(--mono); font-size: 11px; color: var(--muted); fl
 .fine button { font-family: var(--mono); font-size: 14px; padding: 2px; }
 #screen { position: relative; width: min(100%, calc(100vh - 340px)); width: min(100%, calc(100dvh - 340px)); min-width: 200px; aspect-ratio: 1 / 1; max-width: 100%; margin: 0 auto; border-radius: 6px; overflow: hidden; background: #000; }
 #fluoro { width: 100%; height: 100%; display: block; }
+#app.rows3 #screen { width: min(100%, calc(100vh - 385px)); width: min(100%, calc(100dvh - 385px)); }
+#app.rows3 #controls button { min-height: 46px; }
 #ecg { width: 100%; height: 46px; display: block; background: #050807; border-radius: 4px; }
 .readouts { display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px; font-family: var(--mono); font-variant-numeric: tabular-nums; }
 .readouts div { background: var(--panel); border-radius: 4px; padding: 3px 6px; }
@@ -155,6 +157,10 @@ const CASES = [
   { key:'cdx', title:'Caso 3 · Coronaria destra', anat: RIGHT, cat:'JR 4 6F', proj:'OAS 40°',
     story:'Uomo, 57 anni, fumatore. Angina instabile. Stenosi lunga della coronaria destra prossimale-media.',
     target:'CDX', lesion:{ at:0.31, lenMm:20, sev:0.84 }, diff:'Difficile' },
+  { key:'bif', title:'Caso 4 · Biforcazione', anat: LEFT, cat:'EBU 3.5 6F', proj:'OAS 40° · CRA 25°',
+    story:'Uomo, 66 anni. Angina stabile nonostante la terapia. Biforcazione IVA–prima diagonale, Medina 1,1,1: stent provvisorio sull\'IVA e kissing balloon.',
+    target:'IVA', lesion:{ branch:'D1', lenMm:16, sev:0.82 }, side:{ id:'D1', lenMm:6, sev:0.6 }, diff:'Esperto', bif:true,
+    contrastOk: 112, fluoroOk: 200 },
 ];
 
 // ---------- geometria ----------
@@ -220,7 +226,8 @@ function newGame(ci) {
   C = CASES[ci];
   G = buildAnatomy(C.anat);
   const tgt = G.map[C.target];
-  const c = C.lesion.at * tgt.len, L = C.lesion.lenMm * MM;
+  const c = C.lesion.branch ? G.map[C.lesion.branch].at + 2 * MM : C.lesion.at * tgt.len, L = C.lesion.lenMm * MM;
+  const sbL = C.side ? C.side.lenMm * MM : 0;
   S = {
     phase: 'guida', t: 0, route: [{ v: G.cat, off: 0 }], T: G.cat.len - 30, tipSign: -1,
     push: 0, contrastMl: 0, fluoroS: 0, inj: null, injCount: 0, finalInj: false,
@@ -228,6 +235,9 @@ function newGame(ci) {
     lesion: { c, a: c - L/2, b: c + L/2, L, sev: C.lesion.sev, sev0: C.lesion.sev },
     stent: null, predil: null, dissection: false, blockedMsg: false, pressure: 0, maxP: 0, inflating: false, inflT: 0, deployed: null,
     complication: null, st: 0, hr: 68, wireDone: false, rotations: 0, msgT: 0, extravasation: 0,
+    wires: [{}], aw: 0,
+    sb: C.side ? { id: C.side.id, L: sbL, sev: C.side.sev, sev0: C.side.sev } : null,
+    sbJailed: false, sbProtected: false, sbRecrossed: false, sbDone: false, kiss: null, kissDone: null,
   };
   $('caseLabel').textContent = C.title;
   resize();
@@ -236,12 +246,12 @@ function newGame(ci) {
 }
 
 // ---------- percorso guida ----------
-function entryAt(T) {
-  const r = S.route; let e = r[0];
+function entryAt(T, r = S.route) {
+  let e = r[0];
   for (const x of r) if (x.off <= T) e = x;
   return e;
 }
-function routeRaw(T) { const e = entryAt(T); return rawAt(e.v, T - e.off); }
+function routeRaw(T, r = S.route) { const e = entryAt(T, r); return rawAt(e.v, T - e.off); }
 function heartOff() {
   const ph = S.heart * TAU;
   return [7*Math.sin(ph) + 2*Math.sin(2*ph), 5*Math.sin(ph + 1.1)];
@@ -251,14 +261,31 @@ function disp(v, p) {
   const w = v.isCat ? 0 : 1;
   return [p[0] + o[0]*w, p[1] + o[1]*w];
 }
-function routeP(T) {
-  const e = entryAt(T), s = T - e.off, p = rawAt(e.v, s), o = heartOff();
+function routeP(T, r = S.route) {
+  const e = entryAt(T, r), s = T - e.off, p = rawAt(e.v, s), o = heartOff();
   const w = e.v.isCat ? Math.max(0, (s - (e.v.len - 160)) / 160) : 1;
   return [p[0] + o[0]*w, p[1] + o[1]*w];
 }
-function routeTan(T) { const a = routeRaw(T - 4), b = routeRaw(T + 4), l = Math.hypot(b[0]-a[0], b[1]-a[1]) || 1; return [(b[0]-a[0])/l, (b[1]-a[1])/l]; }
+function routeTan(T, r = S.route) { const a = routeRaw(T - 4, r), b = routeRaw(T + 4, r), l = Math.hypot(b[0]-a[0], b[1]-a[1]) || 1; return [(b[0]-a[0])/l, (b[1]-a[1])/l]; }
 function tipEntry() { return S.route[S.route.length - 1]; }
 function targetEntry() { return S.route.find(e => e.v.id === C.target); }
+// più guide: S.route/S.T/S.tipSign sono sempre quelle della guida attiva
+function getWire(i) { return i === S.aw ? { route: S.route, T: S.T, tipSign: S.tipSign } : S.wires[i]; }
+function saveWire() { S.wires[S.aw] = { route: S.route, T: S.T, tipSign: S.tipSign }; }
+function loadWire(i) {
+  if (i === S.aw) return;
+  saveWire(); S.aw = i;
+  if (!S.wires[i] || !S.wires[i].route) S.wires[i] = { route: [{ v: G.cat, off: 0 }], T: G.cat.len - 30, tipSign: -1 };
+  const w = S.wires[i]; S.route = w.route; S.T = w.T; S.tipSign = w.tipSign; S.push = 0;
+  const b = $('bWire'); if (b) b.innerHTML = wireLabel();
+}
+function wireLabel() { return `Guida ${S.aw + 1} ⇄<small>passa alla ${S.aw ? 1 : 2}</small>`; }
+function sbWireOk() {
+  if (!S.sb || S.wires.length < 2 && S.aw === 0) return false;
+  const w = getWire(1); if (!w || !w.route) return false;
+  const se = w.route.find(e => e.v.id === S.sb.id);
+  return !!se && w.T > se.off + 12 * MM && !S.sbJailed;
+}
 
 function moveWire(dir, dt) {
   const top = tipEntry();
@@ -272,7 +299,13 @@ function moveWire(dir, dt) {
   let newT = S.T + dir * speed * dt;
   if (dir < 0) {
     newT = Math.max(G.cat.len * 0.55, newT);
-    while (S.route.length > 1 && newT < tipEntry().off) S.route.pop();
+    while (S.route.length > 1 && newT < tipEntry().off) {
+      const gone = S.route.pop();
+      if (S.sb && gone.v.id === S.sb.id && S.aw === 1 && S.sbJailed) {
+        S.sbJailed = false;
+        flash('Guida 2 fuori dal ramo laterale. Ora ripassala nella diagonale <b>attraverso le maglie</b> dello stent.');
+      }
+    }
     S.T = newT; S.push = 0; return;
   }
   const s0 = oldT - top.off, s1 = newT - top.off, v = top.v;
@@ -287,8 +320,13 @@ function moveWire(dir, dt) {
     for (const ch of group) { const d = Math.abs(ch.angle - want); if (d < bestD) { bestD = d; best = ch; } }
     if (best !== 'main') {
       S.route.push({ v: best, off: top.off + at });
+      if (S.sb && best.id === S.sb.id && S.aw === 1 && S.deployed && !S.sbJailed && !S.sbRecrossed) {
+        S.sbRecrossed = true;
+        flash('<b>Ramo laterale ricrossato</b> attraverso le maglie dello stent. Ora puoi fare il kissing balloon.');
+        return;
+      }
       S.T = newT; S.push = 0;
-      if (!best.isCat && S.phase === 'guida') flash('La guida entra in: <b>' + best.name + '</b>', best.id === C.target || isAncestorOfTarget(best) ? '' : 'warn');
+      if (!best.isCat && (S.phase === 'guida' || S.phase === 'finale')) flash('La guida entra in: <b>' + best.name + '</b>', best.id === C.target || isAncestorOfTarget(best) || (S.sb && S.aw === 1 && best.id === S.sb.id) ? '' : 'warn');
       return;
     } else if (endsHere) { S.T = top.off + v.len; return; }
   }
@@ -303,10 +341,11 @@ function moveWire(dir, dt) {
 }
 function isAncestorOfTarget(v) { let t = G.map[C.target]; while (t) { if (t === v) return true; t = t.parent; } return false; }
 function wireOk() {
-  const te = targetEntry(); if (!te) return false;
-  const nx = S.route[S.route.indexOf(te) + 1];
+  const w = getWire(0); if (!w || !w.route) return false;
+  const te = w.route.find(e => e.v.id === C.target); if (!te) return false;
+  const nx = w.route[w.route.indexOf(te) + 1];
   if (nx && nx.off - te.off < S.lesion.b + 2 * MM) return false;   // la guida è uscita in un ramo prima della lesione
-  return S.T > te.off + S.lesion.b + 12 * MM;
+  return w.T > te.off + S.lesion.b + 12 * MM;
 }
 
 // ---------- diametri / contrasto ----------
@@ -323,6 +362,8 @@ function lumen(v, s) {
     }
     if (D && D.rupture && Math.abs(s - D.s1) < 8) ld = d * 1.25;
     d = ld;
+  } else if (S.sb && v.id === S.sb.id && s < S.sb.L) {
+    d *= 1 - S.sb.sev * Math.sqrt(0.5 * (1 + Math.cos(Math.PI * s / S.sb.L)));
   }
   return d;
 }
@@ -332,6 +373,7 @@ function gDist(v, s) {
   return gDist(v.parent, v.at) + s + delay(v, s);
 }
 function delay(v, s) {
+  if (S.sb && v.id === S.sb.id) return S.sb.sev > 0.7 && s > S.sb.L ? (s - S.sb.L) * 1.6 * (S.sb.sev - 0.55) / 0.3 + 40 : 0;
   if (v.id !== C.target || treated()) return 0;
   return s > S.lesion.b ? (s - S.lesion.b) * 1.6 + 40 : 0;
 }
@@ -446,7 +488,7 @@ function drawContrast(ctx) {
   return alpha;
 }
 function sampleV(v, s0, s1) { const out = []; for (let s = s0; s < s1; s += 5) out.push(disp(v, rawAt(v, s))); out.push(disp(v, rawAt(v, s1))); return out; }
-function sampleRoute(T0, T1, step = 4) { const out = []; for (let T = T0; T < T1; T += step) out.push(routeP(T)); out.push(routeP(T1)); return out; }
+function sampleRoute(T0, T1, step = 4, r = S.route) { const out = []; for (let T = T0; T < T1; T += step) out.push(routeP(T, r)); out.push(routeP(T1, r)); return out; }
 
 function drawFluoro() {
   const ctx = fluoroCtx;
@@ -461,16 +503,9 @@ function drawFluoro() {
   // contrasto
   drawContrast(ctx);
   viewTf(ctx);
-  // guida 0.014"
-  const tipT = S.T;
-  ctx.strokeStyle = 'rgba(25,26,23,0.8)'; ctx.lineWidth = 0.5 * MM;
-  strokePath(ctx, sampleRoute(G.cat.len * 0.5, Math.max(G.cat.len * 0.5 + 1, tipT - 30 * MM)));
-  ctx.strokeStyle = 'rgba(15,15,13,0.95)'; ctx.lineWidth = 0.75 * MM;
-  strokePath(ctx, sampleRoute(Math.max(G.cat.len * 0.5, tipT - 30 * MM), tipT, 3));
-  // punta curva
-  const tp = routeP(tipT), tn = routeTan(tipT), th = S.tipSign * 0.65;
-  const bend = [tn[0]*Math.cos(th) - tn[1]*Math.sin(th), tn[0]*Math.sin(th) + tn[1]*Math.cos(th)];
-  ctx.beginPath(); ctx.moveTo(tp[0], tp[1]); ctx.quadraticCurveTo(tp[0] + tn[0]*6, tp[1] + tn[1]*6, tp[0] + bend[0]*18, tp[1] + bend[1]*18); ctx.stroke();
+  // guide 0.014"
+  for (let i = 0; i < S.wires.length; i++) { const w = getWire(i); if (w && w.route) drawWire(ctx, w.route, w.T, w.tipSign, i === S.aw ? 1 : 0.75); }
+  if (S.phase === 'kiss' && (S.inflating || S.pressure > 0)) drawKiss(ctx);
   // stent
   const st = S.stent;
   if (st && !S.deployed) {
@@ -486,8 +521,8 @@ function drawFluoro() {
     for (const m of [a, b]) { const p = routeP(m); ctx.beginPath(); ctx.arc(p[0], p[1], 0.85 * MM, 0, TAU); ctx.fill(); }
   }
   if (S.deployed) {
-    const D = S.deployed, te = targetEntry();
-    const pts = sampleRoute(te.off + D.s0, te.off + D.s1, 3);
+    const D = S.deployed, tgt = G.map[C.target];
+    const pts = D.s0 < 0 ? sampleV(tgt.parent, Math.max(0, tgt.parent.len + D.s0), tgt.parent.len).concat(sampleV(tgt, 0, D.s1)) : sampleV(tgt, D.s0, D.s1);
     ctx.strokeStyle = 'rgba(45,46,42,0.4)'; ctx.lineWidth = D.diam * MM * (D.p < 9 ? 0.85 : 1); ctx.lineCap = 'butt'; strokePath(ctx, pts);
     ctx.setLineDash([2, 3]); ctx.strokeStyle = 'rgba(30,31,28,0.55)'; ctx.lineWidth = D.diam * MM * 0.6; strokePath(ctx, pts); ctx.setLineDash([]); ctx.lineCap = 'round';
   }
@@ -507,6 +542,31 @@ function drawFluoro() {
   if (!S.fluoroOn) { ctx.fillStyle = 'rgba(242,179,61,0.9)'; ctx.fillText('LIH', W - 8 * DPR, 8 * DPR); }
   else { ctx.fillStyle = 'rgba(255,214,90,0.95)'; ctx.beginPath(); ctx.arc(W - 14 * DPR, 14 * DPR, 5 * DPR, 0, TAU); ctx.fill(); }
   ctx.textAlign = 'left';
+}
+
+function drawWire(ctx, route, T, sign, a) {
+  ctx.strokeStyle = `rgba(25,26,23,${0.8 * a})`; ctx.lineWidth = 0.5 * MM;
+  strokePath(ctx, sampleRoute(G.cat.len * 0.5, Math.max(G.cat.len * 0.5 + 1, T - 30 * MM), 4, route));
+  ctx.strokeStyle = `rgba(15,15,13,${0.95 * a})`; ctx.lineWidth = 0.75 * MM;
+  strokePath(ctx, sampleRoute(Math.max(G.cat.len * 0.5, T - 30 * MM), T, 3, route));
+  const tp = routeP(T, route), tn = routeTan(T, route), th = sign * 0.65;
+  const bend = [tn[0]*Math.cos(th) - tn[1]*Math.sin(th), tn[0]*Math.sin(th) + tn[1]*Math.cos(th)];
+  ctx.beginPath(); ctx.moveTo(tp[0], tp[1]); ctx.quadraticCurveTo(tp[0] + tn[0]*6, tp[1] + tn[1]*6, tp[0] + bend[0]*18, tp[1] + bend[1]*18); ctx.stroke();
+}
+function kissRanges() {
+  const w1 = getWire(0), w2 = getWire(1);
+  const te = w1.route.find(e => e.v.id === C.target), se = w2.route.find(e => e.v.id === S.sb.id);
+  const bt = te.off + G.map[S.sb.id].at;
+  return { r1: w1.route, a1: bt - 6 * MM, b1: bt + 9 * MM, r2: w2.route, a2: se.off - 3 * MM, b2: se.off + 10 * MM };
+}
+function drawKiss(ctx) {
+  const k = kissRanges(), K = SPEC.kiss, p = S.pressure;
+  const dia = d => p < 4 ? 0.45 + (d * (1 + K.comp * (4 - K.nom)) - 0.45) * p / 4 : d * (1 + K.comp * (p - K.nom));
+  ctx.strokeStyle = 'rgba(30,31,28,0.62)'; ctx.lineCap = 'butt';
+  ctx.lineWidth = dia(S.kiss.dM) * MM; strokePath(ctx, sampleRoute(k.a1, k.b1, 3, k.r1));
+  ctx.lineWidth = dia(S.kiss.dS) * MM; strokePath(ctx, sampleRoute(k.a2, k.b2, 3, k.r2));
+  ctx.lineCap = 'round'; ctx.fillStyle = 'rgba(10,10,9,0.95)';
+  for (const [T, r] of [[k.a1, k.r1], [k.b1, k.r1], [k.a2, k.r2], [k.b2, k.r2]]) { const q = routeP(T, r); ctx.beginPath(); ctx.arc(q[0], q[1], 0.8 * MM, 0, TAU); ctx.fill(); }
 }
 
 // ---------- ECG ----------
@@ -549,11 +609,22 @@ function btn(label, sub, opts = {}) {
     b.addEventListener('pointerup', off); b.addEventListener('pointercancel', off); b.addEventListener('lostpointercapture', off);
     b.addEventListener('keydown', e => { if ((e.key === ' ' || e.key === 'Enter') && !held[opts.hold]) { held[opts.hold] = true; b.classList.add('held'); } });
     b.addEventListener('keyup', e => { if (e.key === ' ' || e.key === 'Enter') off(); });
-  } else if (opts.onClick) b.addEventListener('click', opts.onClick);
+  } else if (opts.onClick) b.addEventListener('click', e => { if (performance.now() - ctrlT < 250) return; opts.onClick(e); });
   b.addEventListener('contextmenu', e => e.preventDefault());
   return b;
 }
-function setControls(list) { const c = $('controls'); c.innerHTML = ''; for (const b of list) c.appendChild(b); for (const k in held) held[k] = false; }
+let ctrlT = 0;   // evita che il tocco che ha cambiato fase "cada" sul nuovo pulsante sotto il dito
+function setControls(list, rows3 = false) {
+  ctrlT = performance.now();
+  const c = $('controls'); c.innerHTML = ''; for (const b of list) c.appendChild(b); for (const k in held) held[k] = false;
+  const app = $('app'); if (app.classList.contains('rows3') !== rows3) { app.classList.toggle('rows3', rows3); resize(); }
+}
+const wireBtn = (cls = 'wide3') => btn(wireLabel(), '', { id: 'bWire', cls, onClick: () => { loadWire(S.aw ? 0 : 1); } });
+const wireRow = () => [
+  btn('◀ Ritira', 'tieni premuto', { hold: 'back' }),
+  btn('⟳ Ruota', 'torquer', { onClick: () => { S.tipSign *= -1; S.rotations++; S.fluoroS += 0.4; } }),
+  btn('Avanza ▶', 'tieni premuto', { hold: 'fwd' }),
+];
 function fineBox() {
   const d = document.createElement('div'); d.className = 'fine';
   d.append(btn('−1', 'mm', { id: 'bFineBack', onClick: () => nudgeStent(-MM) }), btn('+1', 'mm', { id: 'bFineFwd', onClick: () => nudgeStent(MM) }));
@@ -563,17 +634,18 @@ const contrastBtn = () => btn('Contrasto', '8 ml · cine', { onClick: inject });
 
 function setPhase(p) {
   S.phase = p;
-  $('gauge').hidden = p !== 'gonfia';
+  $('gauge').hidden = p !== 'gonfia' && p !== 'kiss';
+  if (p !== 'finale' && p !== 'guida' && S.aw !== 0) loadWire(0);
   if (p === 'guida') {
     setControls([
-      btn('◀ Ritira', 'tieni premuto', { hold: 'back' }),
-      btn('⟳ Ruota', 'torquer', { onClick: () => { S.tipSign *= -1; S.rotations++; S.fluoroS += 0.4; } }),
-      btn('Avanza ▶', 'tieni premuto', { hold: 'fwd' }),
+      ...wireRow(),
       contrastBtn(),
       btn('Pallone', S.predil ? 'già predilatato' : 'predilatazione', { id: 'bBal', cls: S.predil ? '' : 'primary', onClick: () => openDeviceChoice('balloon') }),
       btn('Stent', 'DES', { id: 'bNext', cls: S.predil ? 'primary' : '', onClick: () => openDeviceChoice('stent') }),
-    ]);
-    if (S.predil) say('<b>Predilatazione fatta</b> Ora porta lo stent. Inietta contrasto per vedere il risultato del pallone.');
+      ...(C.bif ? [wireBtn()] : []),
+    ], !!C.bif);
+    if (C.bif && !S.predil) say('<b>Fase 1 · Due guide</b> Guida 1 nell\'IVA oltre la lesione, guida 2 nella diagonale per proteggerla. Il tasto in basso cambia guida.');
+    else if (S.predil) say('<b>Predilatazione fatta</b> Ora porta lo stent. Inietta contrasto per vedere il risultato del pallone.');
     else say('<b>Fase 1 · Guida</b> Inietta contrasto, poi porta la guida oltre la stenosi. Prima di ogni biforcazione ruota la punta verso il ramo giusto.');
   } else if (p === 'stent') {
     setControls([
@@ -594,6 +666,20 @@ function setPhase(p) {
     setGaugeZones();
     const k = spec();
     say(`<b>${S.stent.kind === 'balloon' ? 'Predilatazione' : 'Fase 3 · Rilascio'}</b> Tieni premuto per gonfiare. Nominale ${k.nom} atm, RBP ${k.rbp} atm. Rilascia per sgonfiare.`);
+  } else if (p === 'finale' && C.bif) {
+    if (S.wires.length > 1) loadWire(1);
+    setControls([
+      ...wireRow(),
+      contrastBtn(),
+      btn('Kissing', 'due palloni', { id: 'bKiss', cls: S.kissDone ? '' : 'primary', onClick: openKiss }),
+      btn('Termina', 'referto', { id: 'bEnd', onClick: () => report() }),
+      wireBtn(''),
+      btn('Postdilata', 'NC 16 atm', { id: 'bPost', cls: 'wide2', onClick: postDil }),
+    ], true);
+    if (S.deployed && S.deployed.post) $('bPost').disabled = true;
+    if (S.kissDone) say('<b>Controllo finale</b> Inietta contrasto per vedere il risultato sui due rami, poi termina.');
+    else if (S.sbJailed) say('<b>Ramo laterale chiuso dalle maglie</b> La guida 2 è intrappolata (jailed). Ritirala nell\'IVA e ripassala nella diagonale, poi fai il kissing.');
+    else say('<b>Biforcazione</b> Porta la guida 2 nella diagonale attraverso le maglie dello stent, poi fai il kissing.');
   } else if (p === 'finale') {
     setControls([
       contrastBtn(),
@@ -601,6 +687,13 @@ function setPhase(p) {
       btn('Termina', 'referto', { id: 'bEnd', cls: 'primary', onClick: () => report() }),
     ]);
     say('<b>Controllo finale</b> Inietta contrasto e valuta il risultato. Se serve postdilata, poi termina.');
+  } else if (p === 'kiss') {
+    setControls([
+      btn('◀ Annulla', '', { onClick: () => { if (!S.inflating) setPhase('finale'); } }),
+      btn('Gonfia entrambi', 'tieni premuto · rilascia per sgonfiare', { hold: 'infl', cls: 'danger wide2', onRelease: deflate }),
+    ]);
+    setGaugeZones();
+    say(`<b>Kissing balloon</b> I due palloni si gonfiano insieme. Nominale ${SPEC.kiss.nom} atm, RBP ${SPEC.kiss.rbp} atm.`);
   }
 }
 let msgLock = 0;
@@ -617,8 +710,9 @@ function inject() {
 const SPEC = {
   balloon: { nom: 8, rbp: 14, burst: 16, comp: 0.025, name: 'pallone' },
   stent:   { nom: 12, rbp: 18, burst: 20, comp: 0.012, name: 'stent' },
+  kiss:    { nom: 10, rbp: 16, burst: 18, comp: 0.01, name: 'pallone' },
 };
-function spec() { return SPEC[S.stent ? S.stent.kind : 'stent']; }
+function spec() { return S.phase === 'kiss' ? SPEC.kiss : SPEC[S.stent ? S.stent.kind : 'stent']; }
 function setGaugeZones() {
   const k = spec(), pc = x => (x / 24 * 100).toFixed(1) + '%';
   $('gaugeBar').style.background = `linear-gradient(90deg, #22302a 0 ${pc(k.nom - 3)}, #2d4a33 ${pc(k.nom - 3)} ${pc(k.nom)}, #3d6b3f ${pc(k.nom)} ${pc(k.rbp)}, #5c5222 ${pc(k.rbp)} ${pc(k.burst)}, #5c2622 ${pc(k.burst)} 100%)`;
@@ -656,6 +750,7 @@ function openDeviceChoice(kind) {
   });
   pick($('cD'), v => d = v); pick($('cL'), v => L = v);
   $('cOk').addEventListener('click', () => {
+    loadWire(0);
     S.stent = { kind, d, Lmm: L, L: L * MM, P: G.cat.len * 0.6 };
     S.blockedMsg = false;
     hideOverlay(); setPhase('stent');
@@ -693,6 +788,7 @@ function predilate(p) {
   else flash('Predilatazione a <b>' + p.toFixed(0) + ' atm</b>: placca aperta, stenosi ora circa ' + Math.round(S.lesion.sev * 100) + '%. Porta lo stent.');
 }
 function deflate() {
+  if (S.phase === 'kiss') return deflateKiss();
   if (S.phase !== 'gonfia' || !S.inflating) { S.inflating = false; return; }
   S.inflating = false;
   const p = S.maxP;
@@ -704,9 +800,77 @@ function deflate() {
   const te = targetEntry(), st = S.stent;
   S.deployed = { s0: st.P - st.L/2 - te.off, s1: st.P + st.L/2 - te.off, diam: st.d * (1 + 0.012 * (Math.min(p, 20) - 12)), p, rupture: p > 20, post: false };
   S.pressure = 0;
-  if (p > 20) { S.complication = 'Rottura del pallone oltre la RBP con dissezione al margine distale'; flash('<b>Rottura del pallone!</b> Dissezione al margine distale. Controlla col contrasto.', 'bad'); }
-  else flash('Stent rilasciato a <b>' + p.toFixed(0) + ' atm</b>. Pallone sgonfiato e ritirato.');
-  setTimeout(() => setPhase('finale'), 50);
+  let jail = false;
+  if (S.sb) {
+    const at = G.map[S.sb.id].at;
+    if (S.deployed.s0 < at && S.deployed.s1 > at) {
+      jail = true;
+      S.sbProtected = sbWireOk();
+      S.sb.sev = Math.max(S.sb.sev, S.sbProtected ? 0.75 : 0.93);
+      const w2 = S.wires[1];
+      if (w2 && w2.route && w2.route.some(e => e.v.id === S.sb.id)) S.sbJailed = true;
+    }
+  }
+  setTimeout(() => {
+    setPhase('finale');
+    if (p > 20) { S.complication = 'Rottura del pallone oltre la RBP con dissezione al margine distale'; flash('<b>Rottura del pallone!</b> Dissezione al margine distale. Controlla col contrasto.', 'bad'); }
+    else if (jail) flash('Stent rilasciato a <b>' + p.toFixed(0) + ' atm</b>. La placca si è spostata sull\'ostio della diagonale' + (S.sbJailed ? ' e la guida 2 è intrappolata dietro le maglie.' : '.'), 'warn');
+    else flash('Stent rilasciato a <b>' + p.toFixed(0) + ' atm</b>. Pallone sgonfiato e ritirato.');
+  }, 50);
+}
+function kissOk() {
+  if (!S.deployed) return 'Prima impianta lo stent nel ramo principale.';
+  if (S.kissDone) return 'Kissing già eseguito.';
+  if (!wireOk()) return 'La guida 1 deve restare nell\'IVA oltre lo stent.';
+  if (S.sbJailed) return 'La guida 2 è intrappolata dietro le maglie: ritirala e ripassala nella diagonale.';
+  if (!sbWireOk() || !S.sbRecrossed) return 'Porta la guida 2 in fondo alla diagonale attraverso le maglie dello stent.';
+  return '';
+}
+function openKiss() {
+  const why = kissOk(); if (why) { flash(why, 'warn'); return; }
+  const sbRef = G.map[S.sb.id].d0;
+  let dM = null, dS = null;
+  const mOpts = [2.5, 2.75, 3.0, 3.5, 4.0], sOpts = [1.5, 2.0, 2.5, 3.0];
+  showOverlay(`
+    <div class="card">
+      <div class="eyebrow">Biforcazione · kissing balloon</div>
+      <h2>Scegli i due palloni</h2>
+      <div class="qca"><span>Stent nel ramo principale</span><span>${S.stent.d.toFixed(2)} mm</span>
+      <span>Diagonale · diametro di riferimento</span><span>${sbRef.toFixed(2)} mm</span>
+      <span>Ostio della diagonale · stenosi</span><span>${Math.round(S.sb.sev * 100)}%</span></div>
+      <h3>Pallone nel ramo principale (NC)</h3><div class="choices" id="kM">${mOpts.map(x => `<button data-v="${x}">${x.toFixed(2)}</button>`).join('')}</div>
+      <h3>Pallone nella diagonale</h3><div class="choices" id="kS">${sOpts.map(x => `<button data-v="${x}">${x.toFixed(1)}</button>`).join('')}</div>
+      <p class="how">Il pallone principale va dentro lo stent, della sua misura. Quello laterale passa dalle maglie verso la diagonale: diametro vicino al riferimento del ramo laterale.</p>
+      <button class="primary" id="kOk" disabled>Posiziona i palloni</button>
+      <button id="kNo">Annulla</button>
+    </div>`);
+  const pick = (box, set) => box.addEventListener('click', e => {
+    const b = e.target.closest('button'); if (!b) return;
+    box.querySelectorAll('button').forEach(x => x.classList.toggle('sel', x === b)); set(+b.dataset.v);
+    $('kOk').disabled = !(dM && dS);
+  });
+  pick($('kM'), v => dM = v); pick($('kS'), v => dS = v);
+  $('kOk').addEventListener('click', () => { S.kiss = { dM, dS }; hideOverlay(); setPhase('kiss'); });
+  $('kNo').addEventListener('click', hideOverlay);
+}
+function deflateKiss() {
+  if (!S.inflating) return;
+  S.inflating = false;
+  const p = S.maxP;
+  if (p < 3) { flash('Pressione troppo bassa, i palloni non si sono aperti. Riprova.', 'warn'); S.pressure = 0; S.maxP = 0; S.inflT = 0; return; }
+  const sbRef = G.map[S.sb.id].d0, K = SPEC.kiss;
+  const dS = S.kiss.dS * (1 + K.comp * (Math.min(p, 18) - K.nom)), dM = S.kiss.dM * (1 + K.comp * (Math.min(p, 18) - K.nom));
+  const rS = dS / sbRef, rM = S.kiss.dM / S.stent.d;
+  const gain = Math.max(0, Math.min(1, (rS - 0.55) / 0.4));
+  S.sb.sev = Math.max(0.1, S.sb.sev * (1 - 0.85 * gain));
+  if (S.deployed) S.deployed.diam = Math.max(S.deployed.diam, Math.min(dM, S.stent.d * 1.12));
+  const diss = rS > 1.2 || p > 16;
+  S.kissDone = { dM: S.kiss.dM, dS: S.kiss.dS, p, rS, rM, diss };
+  S.pressure = 0; S.maxP = 0; S.inflT = 0;
+  setPhase('finale');
+  if (p > 16) flash('<b>Rottura del pallone laterale</b> con dissezione dell\'ostio della diagonale.', 'bad');
+  else if (diss) flash('<b>Dissezione</b> dell\'ostio della diagonale: pallone laterale troppo grande.', 'bad');
+  else flash('Kissing a <b>' + p.toFixed(0) + ' atm</b>. Ostio della diagonale ora circa ' + Math.round(S.sb.sev * 100) + '%. Controlla col contrasto.');
 }
 function postDil() {
   const D = S.deployed; if (!D || D.post) return;
@@ -757,10 +921,24 @@ function evaluate() {
     if (dissectionCovered()) r.notes.push('Dissezione da pallone coperta dallo stent.');
     else { r.total -= 10; r.notes.push('Dissezione da pallone non coperta dallo stent (−10).'); }
   }
-  const cm = S.contrastMl;
-  add('Mezzo di contrasto', Math.round(cm <= 72 ? 15 : Math.max(0, 15 - (cm - 72) / 8)), 15, cm + ' ml');
+  if (S.sb) {
+    add('Protezione ramo laterale', S.sbProtected ? 5 : 0, 5, S.sbProtected ? 'guida in diagonale' : 'assente');
+    const KD = S.kissDone;
+    if (!KD) add('Kissing balloon', 0, 12, 'non eseguito');
+    else {
+      const pts = (KD.rS >= 0.85 && KD.rS <= 1.1 ? 6 : KD.rS >= 0.7 && KD.rS <= 1.2 ? 3 : 1) + (KD.rM >= 0.9 && KD.rM <= 1.1 ? 4 : 1) + (KD.p >= 8 && KD.p <= 16 ? 2 : 0);
+      add('Kissing balloon', pts, 12, KD.dM.toFixed(2) + ' + ' + KD.dS.toFixed(1) + ' · ' + KD.p.toFixed(0) + ' atm');
+      if (KD.diss) { r.total -= 8; r.notes.push('Dissezione dell\'ostio della diagonale durante il kissing (−8).'); }
+    }
+    r.sbResidual = Math.round(S.sb.sev * 100);
+    if (r.sbResidual > 50) r.notes.push('Diagonale con stenosi ostiale residua significativa.');
+  }
+  const cm = S.contrastMl, cOk = C.contrastOk || 72, fOk = C.fluoroOk || 120;
+  add('Mezzo di contrasto', Math.round(cm <= cOk ? 15 : Math.max(0, 15 - (cm - cOk) / 8)), 15, cm + ' ml');
   const fs = S.fluoroS;
-  add('Tempo di scopia', Math.round(fs <= 120 ? 15 : Math.max(0, 15 - (fs - 120) / 18)), 15, fmtTime(fs));
+  add('Tempo di scopia', Math.round(fs <= fOk ? 15 : Math.max(0, 15 - (fs - fOk) / 18)), 15, fmtTime(fs));
+  const maxSum = r.parts.reduce((a, p) => a + p[3], 0);
+  r.total = r.total * 100 / maxSum;
   if (S.complication) { r.total = Math.max(0, r.total - (S.extravasation ? 60 : 25)); r.notes.unshift('Complicanza: ' + S.complication + '.'); }
   // stenosi residua
   const tgt = G.map[C.target];
@@ -791,6 +969,7 @@ function report() {
         ${r.parts.map(p => `<span>${p[0]} · ${p[1]}</span><span>${p[2]}/${p[3]}</span>`).join('')}
         <span>Stenosi residua</span><span>${r.residual}%</span>
         <span>Flusso finale</span><span>TIMI ${r.timi}</span>
+        ${r.sbResidual != null ? `<span>Ostio della diagonale</span><span>${r.sbResidual}% · TIMI ${r.sbResidual > 85 ? 1 : r.sbResidual > 70 ? 2 : 3}</span>` : ''}
         <span>Record su questo caso</span><span>${Math.max(best, r.total)}</span>
       </div>
       ${r.notes.map(n => `<p>${n}</p>`).join('')}
@@ -817,6 +996,7 @@ function intro() {
         <span><b>Contrasto</b> mostra le coronarie per un paio di secondi. Ogni iniezione costa 8 ml.</span>
         <span><b>Ruota</b> gira la punta curva della guida: alle biforcazioni la guida entra nel ramo verso cui punta.</span>
         <span><b>Avanza / Ritira</b> si tengono premuti. Il tempo di scopia corre solo mentre lavori.</span>
+        <span><b>Biforcazione</b> due guide: lo stent schiaccia il ramo laterale, poi ripassi la guida 2 nelle maglie e fai il kissing.</span>
         <span><b>Pallone</b> predilata la placca: senza predilatazione lo stent non passa le stenosi più strette.</span>
         <span>Non spingere la guida contro il fondo di un vaso.</span>
       </div>
@@ -837,11 +1017,12 @@ function step(dt) {
   if (msgLock > 0) msgLock -= dt;
   const injActive = S.inj && S.t - S.inj.t0 < 3.2;
   let moving = false;
-  if (S.phase === 'guida') {
+  if (S.phase === 'guida' || (S.phase === 'finale' && C.bif)) {
     if (held.fwd) { moveWire(1, dt); moving = true; }
     else if (held.back) { moveWire(-1, dt); moving = true; }
     else S.push = 0;
     const ok = wireOk();
+    if (S.sb && S.aw === 1 && !S.sbDone && sbWireOk()) { S.sbDone = true; if (!S.deployed) flash('<b>Guida 2 nella diagonale</b> ramo laterale protetto. Torna alla guida 1 o prosegui col pallone.'); }
     const b = $('bNext'); if (b) b.disabled = !ok;
     const bb = $('bBal'); if (bb) bb.disabled = !ok;
     if (ok && !S.wireDone) { S.wireDone = true; if (!S.predil) flash('<b>Guida oltre la lesione</b> in sede distale. Ora predilata col pallone.'); }
@@ -854,7 +1035,7 @@ function step(dt) {
     const inCor = S.stent.P - S.stent.L / 2 > te.off - 40;
     if (held.fwd && crossBlocked() && S.stent.P >= hi - 1 && !S.blockedMsg) { S.blockedMsg = true; flash('<b>Lo stent non passa</b> la placca è troppo stretta. Ritira lo stent con <b>Cambia</b> e predilata col pallone.', 'warn'); }
     const b = $('bNext'); if (b) b.disabled = !inCor;
-  } else if (S.phase === 'gonfia') {
+  } else if (S.phase === 'gonfia' || S.phase === 'kiss') {
     if (held.infl) {
       S.inflating = true; moving = true;
       S.pressure = Math.min(24, S.pressure + 3.2 * dt); S.maxP = Math.max(S.maxP, S.pressure); S.inflT += dt;
@@ -865,7 +1046,7 @@ function step(dt) {
     if (S.inflating && msgLock <= 0) {
       const k = spec();
       if (S.pressure > k.rbp) say('<b>Oltre la RBP</b> rischio di rottura del pallone!', 'bad');
-      else if (S.pressure >= k.nom) say(S.stent.kind === 'balloon' ? 'Pressione nominale: il pallone è aperto, la placca cede.' : 'Pressione nominale raggiunta. Lo stent è espanso.');
+      else if (S.pressure >= k.nom) say(S.phase === 'kiss' ? 'Pressione nominale: i due palloni si toccano nella biforcazione.' : S.stent.kind === 'balloon' ? 'Pressione nominale: il pallone è aperto, la placca cede.' : 'Pressione nominale raggiunta. Lo stent è espanso.');
       else if (S.inflT > 2) say('Il paziente riferisce dolore toracico durante l\'insufflazione.', 'warn');
     }
   }
